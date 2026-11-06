@@ -62,13 +62,37 @@ button{font:inherit;color:inherit;border:0;cursor:pointer;touch-action:manipulat
 .beauty.busy .lbl{animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.4}to{opacity:1}}
 .toast{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000c;padding:10px 16px;border-radius:12px;font-size:14px;z-index:20;display:none;max-width:90%;text-align:center}
+/* key gate */
+#gate{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:radial-gradient(120% 80% at 50% 0%,#3a0f2a 0%,#111 60%)}
+#gate.hide{display:none}
+.gbox{width:100%;max-width:380px;background:#1b1b1b;border-radius:22px;padding:26px 22px;box-shadow:0 0 0 1px #2a2a2a,0 20px 60px #000a;text-align:center}
+.gbox h2{margin:6px 0 4px;font-size:20px}
+.gbox p{margin:0 0 18px;font-size:13px;opacity:.7;line-height:1.5}
+.gbox .ic{font-size:44px}
+#keyInput{width:100%;background:#0d0d0d;border:1.5px solid #333;border-radius:14px;color:#fff;padding:14px;font:600 17px ui-monospace,Menlo,monospace;
+  text-align:center;letter-spacing:1px;text-transform:uppercase;outline:none;-webkit-user-select:text;user-select:text}
+#keyInput:focus{border-color:var(--accent,#ff4da6)}
+#keyBtn{margin-top:12px;width:100%;border-radius:14px;padding:14px;font-weight:700;background:var(--accent,#ff4da6)}
+#keyBtn:disabled{opacity:.6}
+#keyMsg{min-height:20px;margin-top:12px;font-size:13px;color:#ff7a9c}
 </style>
 </head>
 <body>
+<div id="gate">
+  <form class="gbox" id="gateForm" autocomplete="off">
+    <div class="ic">🔑</div>
+    <h2>Nhập key kích hoạt</h2>
+    <p>Liên hệ admin để nhận key sử dụng Photobooth.</p>
+    <input id="keyInput" placeholder="PB-XXXX-XXXX-XXXX" maxlength="40" spellcheck="false" autocapitalize="characters">
+    <button id="keyBtn" type="submit">Kích hoạt</button>
+    <div id="keyMsg"></div>
+  </form>
+</div>
 <div class="app" id="app">
   <div class="header">
     <b>📸 THANH XUÂN 2026</b>
-    <span class="pill" id="frameName">Khung</span>
+    <span style="display:flex;gap:6px;align-items:center"><span class="pill" id="keyLeft" title="Thời hạn key" hidden></span><span class="pill" id="frameName">Khung</span></span>
   </div>
   <div class="stage" id="stage">
     <div class="preview" id="preview">
@@ -675,10 +699,41 @@ applyFrameUI();
 requestAnimationFrame(()=>{fitPreview();renderFramePickers();});
 // Chặn cử chỉ phóng to của Safari (pinch / double-tap)
 ['gesturestart','gesturechange'].forEach(ev=>document.addEventListener(ev,e=>e.preventDefault(),{passive:false}));
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCam();else startCam();});
-if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) toast('Trình duyệt không hỗ trợ camera. Hãy mở bằng Safari qua HTTPS.',6000);
-else startCam();
-if(state.beauty) setTimeout(loadLandmarker,2500); // tải trước mô hình AI khi rảnh
+/* ================== KEY ================== */
+let unlocked=false, keyExp=null, keyTimer=null;
+const deviceId=localStorage.pb_device||(localStorage.pb_device=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)));
+function fmtLeft(ms){const m=Math.floor(ms/60000),d=Math.floor(m/1440),h=Math.floor(m%1440/60),mm=m%60;
+  return d?`${d} ngày ${h} giờ`:h?`${h} giờ ${mm} phút`:`${Math.max(mm,0)} phút`;}
+function lock(msg){unlocked=false;stopCam();clearInterval(keyTimer);$('gate').classList.remove('hide');$('keyLeft').hidden=true;
+  $('keyMsg').textContent=msg||'';}
+function tickKey(){const el=$('keyLeft');el.hidden=false;
+  if(!keyExp){el.textContent='♾ Vĩnh viễn';return;}
+  const left=keyExp-Date.now();if(left<=0){delete localStorage.pb_key;lock('Key đã hết hạn. Vui lòng nhập key mới.');return;}
+  el.textContent='⏳ '+fmtLeft(left);}
+async function verifyKey(key){
+  const r=await fetch('/api/key/verify',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,deviceId})});
+  return r.json();
+}
+function unlock(res){
+  localStorage.pb_key=res.key;keyExp=res.expiresAt?new Date(res.expiresAt).getTime():null;
+  $('gate').classList.add('hide');tickKey();clearInterval(keyTimer);keyTimer=setInterval(tickKey,30000);
+  if(unlocked)return;unlocked=true;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) toast('Trình duyệt không hỗ trợ camera. Hãy mở bằng Safari qua HTTPS.',6000);
+  else startCam();
+  if(state.beauty) setTimeout(loadLandmarker,2500); // tải trước mô hình AI khi rảnh
+}
+$('gateForm').onsubmit=async e=>{e.preventDefault();
+  const key=$('keyInput').value.trim();if(!key){$('keyMsg').textContent='Vui lòng nhập key';return;}
+  $('keyBtn').disabled=true;$('keyBtn').textContent='Đang kiểm tra…';$('keyMsg').textContent='';
+  try{const res=await verifyKey(key);if(res.ok)unlock(res);else $('keyMsg').textContent=res.message||'Key không hợp lệ';}
+  catch(err){$('keyMsg').textContent='Không kết nối được máy chủ, thử lại sau';}
+  $('keyBtn').disabled=false;$('keyBtn').textContent='Kích hoạt';};
+async function recheck(){const k=localStorage.pb_key;if(!k){lock();return;}
+  try{const res=await verifyKey(k);if(res.ok)unlock(res);else{delete localStorage.pb_key;lock(res.message);}}
+  catch(e){if(!unlocked){$('keyInput').value=k;lock('Không kết nối được máy chủ, thử lại sau');}}}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCam();else if(unlocked){startCam();recheck();}});
+if(localStorage.pb_key)$('gate').classList.add('hide');
+recheck();
 </script>
 </body>
 </html>
